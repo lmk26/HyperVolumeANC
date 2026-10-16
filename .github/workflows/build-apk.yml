@@ -16,10 +16,15 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Install SDK platform
+      - name: Accept licenses and install SDK platform
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "platforms;android-36" "build-tools;36.0.0"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          ls "$ANDROID_HOME" || true
+          yes | "$SDKM" --licenses > /dev/null || true
+          # compileSdk 37: the package id differs between SDK releases, so pick whatever exists.
+          PKG=$("$SDKM" --list 2>/dev/null | grep -oE 'platforms;android-37[^ ]*' | sort -u | head -1 || true)
+          echo "platform package: ${PKG:-none found}"
+          if [ -n "$PKG" ]; then "$SDKM" "$PKG" || true; fi
 
       - uses: gradle/actions/setup-gradle@v4
 
