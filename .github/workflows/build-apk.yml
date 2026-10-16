@@ -40,14 +40,15 @@ jobs:
           P="$ANDROID_HOME/platforms"
           if [ -d "$P/android-37.0" ] && [ ! -d "$P/android-37" ]; then
             cp -r "$P/android-37.0" "$P/android-37"
-            sed -i 's/android-37\.0/android-37/g' "$P/android-37/package.xml"
+            sed -i 's/android-37\.0/android-37/g; s#<api-level>37\.0</api-level>#<api-level>37</api-level>#' "$P/android-37/package.xml"
+            [ -f "$P/android-37/source.properties" ] && echo "::notice::source.properties: $(tr '\n' ' ' < "$P/android-37/source.properties")"
             echo "::notice::package.xml: $(grep -E 'path=|api-level|codename' "$P/android-37/package.xml" | tr -s ' \n' ' ')"
           fi
           chmod +x ./gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace > build.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then
-            grep -E "Caused by:|requires|Dependency|minCompileSdk|AGP|compileSdk" -A1 build.log | head -30 | while IFS= read -r line; do echo "::error::${line}"; done
+            grep -E "compiled against|currently|compileSdk|Compile Sdk" -A1 build.log | head -30 | while IFS= read -r line; do echo "::error::${line}"; done
           fi
           exit $code
 
