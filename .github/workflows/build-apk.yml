@@ -31,6 +31,7 @@ jobs:
       - name: Build release APK
         run: |
           set +e
+          chmod +x ./gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace > build.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then
