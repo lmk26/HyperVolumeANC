@@ -36,6 +36,8 @@ jobs:
           set +e
           # The aliyun mirrors in settings.gradle.kts return 502 from GitHub's runners; use the official repos in CI only.
           sed -i '/maven.aliyun.com/d' settings.gradle.kts
+          # The runner's SDK names the platform android-37.0, while AGP 8.9.2 looks for android-37.
+          sed -i 's/compileSdk = 37/compileSdkPreview = "37.0"/' app/build.gradle.kts
           chmod +x ./gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace > build.log 2>&1
           code=$?
