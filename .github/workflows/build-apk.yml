@@ -29,7 +29,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build release APK
-        run: ./gradlew assembleRelease --no-daemon
+        run: |
+          set +e
+          ./gradlew assembleRelease --no-daemon --stacktrace > build.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            grep -E "error:|^e: |What went wrong|Could not|not found|FAILED" -A2 build.log | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit $code
 
       - uses: actions/upload-artifact@v4
         with:
