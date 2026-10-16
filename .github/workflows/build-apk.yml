@@ -19,12 +19,15 @@ jobs:
       - name: Accept licenses and install SDK platform
         run: |
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          ls "$ANDROID_HOME" || true
           yes | "$SDKM" --licenses > /dev/null || true
-          # compileSdk 37: the package id differs between SDK releases, so pick whatever exists.
-          PKG=$("$SDKM" --list 2>/dev/null | grep -oE 'platforms;android-37[^ ]*' | sort -u | head -1 || true)
-          echo "platform package: ${PKG:-none found}"
-          if [ -n "$PKG" ]; then "$SDKM" "$PKG" || true; fi
+          "$SDKM" --list > sdk-list.txt 2>&1 || true
+          echo "::notice::available platforms: $(grep -oE 'platforms;android-3[0-9][^ ]*' sdk-list.txt | sort -u | tr '\n' ' ')"
+          # compileSdk 37: install every package id that looks like API 37.
+          for PKG in $(grep -oE 'platforms;android-37[^ ]*' sdk-list.txt | sort -u); do
+            echo "installing $PKG"
+            "$SDKM" "$PKG" || echo "::warning::install of $PKG failed"
+          done
+          echo "::notice::installed platforms: $(ls "$ANDROID_HOME/platforms" | tr '\n' ' ')"
 
       - uses: gradle/actions/setup-gradle@v4
 
