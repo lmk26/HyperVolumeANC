@@ -37,7 +37,7 @@ Enable HyperVolumeANC in [LSPosed](https://github.com/LSPosed/LSPosed) with both
 
 - **System UI** (`com.android.systemui`) — draws the ANC row in the volume panel
 - **Bluetooth extension** (`com.xiaomi.bluetooth`) — relays headset state and broadcasts
-- **Sound effects** (`com.miui.misound`) — provides the panel behind the per-app volume entry above the volume bar; you can skip it if you only use the noise control button
+- **Sound effects** (`com.miui.misound`) — provides the panel behind the per-app volume entry below the Do Not Disturb button; you can skip it if you only use the noise control button
 
 Restart the scopes afterwards (requires root). The app's “Settings → Module status” shows whether the three scopes are connected.
 
@@ -59,8 +59,8 @@ Headsets that only toggle noise cancelling without transparency (for example HUA
 ## Features
 
 - **Volume panel button** — a third instance button next to silent and DND for switching headset noise control
-- **Per-app volume entry** — while an app is playing audio, an entry appears above the volume bar and opens a panel where every app can be adjusted on its own. The panel slides in from the right, its card and slider proportions follow the native style, and it no longer blurs or dims the whole screen. In landscape it also stops the panel buttons from being pushed off the screen.
-- **Native floating ball** — MiSound's own floating ball is hidden (the entry moved above the volume bar); the instance is kept around for the click fallback.
+- **Per-app volume entry** — while an app is playing audio, an entry appears below the Do Not Disturb button and opens a panel where every app can be adjusted on its own. The panel slides in from the right, its card and slider proportions follow the native style, and it no longer blurs or dims the whole screen.
+- **Native floating ball** — MiSound's own floating ball is hidden (the entry moved below the Do Not Disturb button); the instance is kept around for the click fallback.
 - **Three states** — noise cancelling, transparency and off, with a choice between a two state (NC ⇄ transparency) and a three state (NC → transparency → off) cycle
 - **Matching icons** — ring for noise cancelling, dots for transparency, adaptive glyph for off, using the same palette as the rest of the volume panel
 - **Disconnect** — expanding the headset menu in the volume panel lets you disconnect the connected headset

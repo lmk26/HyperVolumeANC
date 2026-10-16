@@ -59,7 +59,7 @@ final class Settings {
         return preferences(context).getBoolean(KEY_ISLAND_NOTIFICATION, true);
     }
 
-    /** 音量条上方的分应用音量入口（小米声音提供面板）是否启用，默认开启。 */
+    /** 音量条勿扰按钮下方的分应用音量入口（小米声音提供面板）是否启用，默认开启。 */
     static boolean appVolumeEntry(Context context) {
         return preferences(context).getBoolean(KEY_APP_VOLUME_ENTRY, true);
     }

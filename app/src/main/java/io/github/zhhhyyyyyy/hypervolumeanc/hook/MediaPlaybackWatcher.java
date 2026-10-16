@@ -22,7 +22,7 @@ import java.util.List;
  * 3. 播放状态为 PLAYER_STATE_STARTED（2）；
  * 4. 音频属性 usage == USAGE_MEDIA 或 volumeControlStream == STREAM_MUSIC。
  *
- * 分应用音量入口只在“真的有应用在发声”时才出现在音量条上方，
+ * 分应用音量入口只在“真的有应用在发声”时才出现在勿扰按钮下方，
  * 没有满足条件时不占用音量条空间。
  */
 final class MediaPlaybackWatcher {

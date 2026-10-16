@@ -11,7 +11,6 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -23,16 +22,16 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 
 /**
- * 音量条上方的「分应用音量」入口按钮。
+ * 音量条按钮列里的「分应用音量」入口按钮，位于静音 / 勿扰（以及降噪）按钮的下面。
  *
- * 设计要点（与 AppVolumeBarHook 的行为对齐，但改到音量条上方）：
- * 1. 只有真的有应用在播放媒体时才出现，没有满足条件时不占用音量条的空间；
- * 2. 位于音量条（滑块）上方、面板顶部之外的空隙里：面板的 topMargin 随之上移一行，
- *    因此滑块、静音与勿扰按钮的绝对位置完全不变，横屏时也不会把按钮挤出屏幕；
+ * 设计要点：
+ * 1. 只有真的有应用在播放媒体时才出现，没有满足条件时不占用按钮列的空间；
+ * 2. 与降噪按钮一样直接插进原生 miui_ringer_btn_layout 里，紧跟在勿扰按钮之后
+ *    （降噪行可见时排在降噪行之后），并加入原生 show/hide 动画的行序列，
+ *    缩放、位移、触底拉伸都和原生按钮保持同一个整体；
  * 3. 与降噪按钮一样复用原生 miui_ringer_mode_layout + RingerButtonHelper，
  *    外观、毛玻璃、按压反馈都是原生的；
- * 4. 展开二级菜单时隐藏（与上游一致，入口是折叠态快捷入口），
- *    展开期间仍跟随面板的缩放动画做同样的位移补偿。
+ * 4. 展开二级菜单时隐藏（入口是折叠态快捷入口）。
  */
 final class MediaVolumeEntry {
     private static final String TAG = "HyperVolumeANC";
@@ -47,20 +46,22 @@ final class MediaVolumeEntry {
     static final String ACTION_EXPAND_MEDIA_VOLUME =
             "io.github.zhhhyyyyyy.hypervolumeanc.action.EXPAND_MEDIA_VOLUME";
 
-    private static final int FALLBACK_BUTTON_WIDTH_DP = 58;
-    private static final int FALLBACK_BUTTON_HEIGHT_DP = 40;
-    private static final int FALLBACK_GAP_DP = 10;
     /** onFinishInflate 时视图还没挂到父节点上，等父节点就绪再注入；最多等这么多轮。 */
     private static final int MAX_INJECT_ATTEMPTS = 8;
 
     private static WeakReference<ViewGroup> entryRow = new WeakReference<>(null);
+    private static WeakReference<View> entryDivider = new WeakReference<>(null);
+    private static WeakReference<View> nativeDividerRef = new WeakReference<>(null);
     private static WeakReference<Object> entryHelper = new WeakReference<>(null);
     private static WeakReference<ViewGroup> dialogView = new WeakReference<>(null);
     private static WeakReference<View> dndRow = new WeakReference<>(null);
-    private static WeakReference<View> volumeContainer = new WeakReference<>(null);
     private static WeakReference<Object> panelController = new WeakReference<>(null);
+    /** 最近一次初始化的 show/hide 动画器，入口注入晚于动画器初始化时用它补加入序列。 */
+    private static WeakReference<Object> showHideAnimator = new WeakReference<>(null);
+    private static WeakReference<View> showHideAnimatorView = new WeakReference<>(null);
 
-    /** 本次展示中入口是否占用了音量条上方的空间（同时决定面板 topMargin 的补偿）。 */
+    /** 入口已经加入原生 show/hide 动画序列：之后缩放与位移都由原生动画驱动。 */
+    private static volatile boolean animatorJoined;
     private static volatile boolean entryShown;
     private static volatile boolean panelExpanded;
     private static volatile boolean panelVisible;
@@ -75,7 +76,7 @@ final class MediaVolumeEntry {
 
     // ---------------------------------------------------------------- 注入
 
-    /** 原生音量面板 inflate 完成后调用，把入口按钮插到音量条上方。 */
+    /** 原生音量面板 inflate 完成后调用，把入口按钮插到勿扰按钮下面。 */
     static void inject(View ringerLayout) {
         if (!(ringerLayout instanceof ViewGroup host)) {
             return;
@@ -100,6 +101,9 @@ final class MediaVolumeEntry {
     }
 
     private static void injectInto(ViewGroup host, ViewGroup dialog) {
+        View divider = null;
+        ViewGroup row = null;
+        ViewGroup buttonLayout = null;
         try {
             if (dialog.findViewWithTag(ENTRY_TAG) != null) {
                 return;
@@ -122,8 +126,19 @@ final class MediaVolumeEntry {
                 return;
             }
 
-            ViewGroup row = (ViewGroup) LayoutInflater.from(context).inflate(layoutId, dialog, false);
+            View buttons = find(host, "miui_ringer_btn_layout");
+            View state = find(host, "miui_ringer_state_layout");
+            View dnd = find(host, "dnd_layout");
+            View nativeDivider = find(host, "miui_volume_ringer_divider");
+            if (!(buttons instanceof ViewGroup group) || dnd == null || nativeDivider == null) {
+                HookLog.e("native ringer hierarchy is incomplete; entry not injected");
+                return;
+            }
+            buttonLayout = group;
+
+            row = (ViewGroup) LayoutInflater.from(context).inflate(layoutId, buttonLayout, false);
             row.setTag(ENTRY_TAG);
+            row.setId(View.generateViewId());
             View blur = required(row, "bg_blur");
             View standard = required(row, "miui_standard_btn");
             View iconView = required(row, "icon");
@@ -145,29 +160,84 @@ final class MediaVolumeEntry {
             blur.setOnClickListener(MediaVolumeEntry::onEntryClick);
             blur.setClickable(true);
 
-            Context entryContext = context;
-            int rowHeight = buttonHeight(entryContext) + gap(entryContext);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, rowHeight);
+            divider = new View(context);
+            divider.setId(View.generateViewId());
+            divider.setLayoutParams(copyLayoutParams(nativeDivider.getLayoutParams()));
             row.setVisibility(View.GONE);
-            dialog.addView(row, 0, params);
+            divider.setVisibility(View.GONE);
+
+            // 紧跟在勿扰按钮后面；降噪行已经注入时排在降噪行后面，保持「静音 / 勿扰 / 降噪 / 分应用音量」的顺序。
+            View anchor = dnd;
+            View anc = VolumeButtonInjector.extraRow();
+            if (anc != null && anc.getParent() == buttonLayout) {
+                anchor = anc;
+            }
+            int insertAt = buttonLayout.indexOfChild(anchor) + 1;
+            buttonLayout.addView(divider, insertAt);
+            buttonLayout.addView(row, insertAt + 1);
+            // 多了一行，按钮列所在的容器不能再被固定高度截断（降噪行同样这么处理）。
+            if (state != null) {
+                VolumeButtonInjector.setWrapContentHeight(state);
+            }
+            VolumeButtonInjector.setWrapContentHeight(host);
 
             entryRow = new WeakReference<>(row);
+            entryDivider = new WeakReference<>(divider);
+            nativeDividerRef = new WeakReference<>(nativeDivider);
             dialogView = new WeakReference<>(dialog);
-            dndRow = new WeakReference<>(find(host, "dnd_layout"));
-            volumeContainer = new WeakReference<>(find(dialog, "volume_dialog_container"));
+            dndRow = new WeakReference<>(dnd);
+            animatorJoined = false;
+            tryJoinAnimator(dialog);
             MediaPlaybackWatcher.listen(context, MediaVolumeEntry::refreshVisibility);
-            HookLog.i("media volume entry injected above the volume bar host="
+            HookLog.i("media volume entry injected below the DND button host="
                     + host.getClass().getSimpleName() + " dialog=" + dialog.getClass().getSimpleName()
-                    + " row=" + row.getLayoutParams().width + "x" + row.getLayoutParams().height
+                    + " index=" + (insertAt + 1) + " animatorJoined=" + animatorJoined
                     + " standardBackground=" + (standard.getBackground() != null));
             HookDiagnostics.ok("sysui_entry", "分应用音量入口行",
-                    "已注入 · 背景=" + (standard.getBackground() != null)
-                            + " · 行高=" + row.getLayoutParams().height + "px");
+                    "已注入勿扰按钮下方 · 背景=" + (standard.getBackground() != null)
+                            + " · 并入原生动画=" + animatorJoined);
             HookDiagnostics.hit("sysui_entry_state", "入口显示判定", "等待判定");
         } catch (Throwable error) {
+            if (buttonLayout != null) {
+                if (row != null && row.getParent() == buttonLayout) {
+                    buttonLayout.removeView(row);
+                }
+                if (divider != null && divider.getParent() == buttonLayout) {
+                    buttonLayout.removeView(divider);
+                }
+            }
             HookLog.e("failed to inject the media volume entry", error);
             HookDiagnostics.failed("sysui_entry", "分应用音量入口行", error);
+        }
+    }
+
+    // ---------------------------------------------------------------- 原生 show/hide 动画
+
+    /** 原生 show/hide 动画器初始化时调用：记下它，并在入口已经存在时立刻并入行序列。 */
+    static void onShowHideAnimatorReady(Object animator, View volumeView) {
+        showHideAnimator = new WeakReference<>(animator);
+        showHideAnimatorView = new WeakReference<>(volumeView);
+        animatorJoined = false;
+        ViewGroup dialog = dialogView.get();
+        if (dialog != null) {
+            tryJoinAnimator(dialog);
+        }
+    }
+
+    private static void tryJoinAnimator(ViewGroup dialog) {
+        ViewGroup row = entryRow.get();
+        Object animator = showHideAnimator.get();
+        View volumeView = showHideAnimatorView.get();
+        if (row == null || animator == null || volumeView == null || animatorJoined) {
+            return;
+        }
+        // 只并入属于同一个音量面板的动画器。
+        if (!isInside(row, volumeView)) {
+            return;
+        }
+        if (VolumeButtonInjector.appendRowToShowHideAnimator(animator, volumeView, row)) {
+            animatorJoined = true;
+            HookLog.i("media volume entry joined native show/hide animation sequence");
         }
     }
 
@@ -185,15 +255,15 @@ final class MediaVolumeEntry {
         }
         Object needShowDialog = readField(group, "mNeedShowDialog");
         if (needShowDialog instanceof Boolean need && !need) {
-            // 控制中心里的音量面板保持原生外观：不显示入口、也不做位移补偿。
+            // 控制中心里的音量面板保持原生外观：不显示入口。
             panelVisible = false;
             panelExpanded = true;
-            setEntryShown(group, false, true);
+            setEntryShown(group, false);
             return;
         }
         panelVisible = true;
         panelExpanded = isExpanded(group);
-        applyVisibility(group, true);
+        applyVisibility(group);
     }
 
     /** 在给定音量面板里找到原生 ringer 布局并按需注入入口（幂等）。 */
@@ -210,14 +280,12 @@ final class MediaVolumeEntry {
             return;
         }
         panelExpanded = expanded;
-        // 展开时原生刚写入的是「展开态」的 topMargin，本身不含补偿，不能再加减一次；
-        // 收起时原生写入的是不含补偿的折叠态 topMargin，需要我们自己补上。
-        applyVisibility(group, !expanded);
+        applyVisibility(group);
     }
 
     /**
      * 音量条开始收起：带动画时不立刻复位，入口要跟着面板一起滑出屏外，
-     * 收起动画结束后再复位（否则面板滑出途中会因为 topMargin 变化跳一下）。
+     * 收起动画结束后再复位。
      */
     static void onDismissStarted(View dialog, boolean withAnimation) {
         if (!withAnimation) {
@@ -225,11 +293,11 @@ final class MediaVolumeEntry {
         }
     }
 
-    /** 收起动画结束：复位入口与面板 topMargin，下一次展示重新判断条件。 */
+    /** 收起动画结束：复位入口，下一次展示重新判断条件。 */
     static void onHideComplete() {
         ViewGroup group = dialogView.get();
         if (group != null) {
-            setEntryShown(group, false, true);
+            setEntryShown(group, false);
         }
         panelVisible = false;
         resetAnimation();
@@ -240,7 +308,7 @@ final class MediaVolumeEntry {
         ViewGroup group = dialogView.get();
         // 面板没显示时不做改动：这里只影响可见状态，避免把收起状态的布局算乱。
         if (group != null && panelVisible) {
-            applyVisibility(group, true);
+            applyVisibility(group);
         }
     }
 
@@ -258,12 +326,12 @@ final class MediaVolumeEntry {
             return;
         }
         lastTickAt = now;
-        applyVisibility(group, true);
+        applyVisibility(group);
     }
 
     /**
-     * 触底 / 拖拽拉伸时官方按等差序列驱动静音与勿扰行，入口位于静音上方一行，
-     * 因此位移是静音位移再外推一步。
+     * 触底 / 拖拽拉伸时官方按等差序列驱动静音与勿扰行：静音是第 0 项、勿扰是第 1 项，
+     * 降噪行是第 2 项，入口排在最后——降噪行可见时是第 3 项，否则是第 2 项。
      */
     static void onSlideRinger(float ringerY) {
         slideRingerY = ringerY;
@@ -278,7 +346,9 @@ final class MediaVolumeEntry {
     private static void applySlideTranslation() {
         ViewGroup entry = entryRow.get();
         if (entry != null && entry.getVisibility() == View.VISIBLE) {
-            entry.setTranslationY(2f * slideRingerY - slideDndY);
+            float step = slideDndY - slideRingerY;
+            int position = VolumeButtonInjector.extraRowVisible() ? 3 : 2;
+            entry.setTranslationY(slideRingerY + position * step);
         }
         VolumeButtonInjector.setExtraRowTranslationY(2f * slideDndY - slideRingerY);
     }
@@ -291,18 +361,6 @@ final class MediaVolumeEntry {
             entry.setTranslationY(0f);
         }
         VolumeButtonInjector.setExtraRowTranslationY(0f);
-    }
-
-    /**
-     * 音量面板 topMargin 的补偿量：入口占用音量条上方一行时，面板整体上移，
-     * 让滑块保持在原位。原生每次套用折叠态布局都会经过这里，
-     * 因此横竖屏切换、展开收起后都保持一致。
-     */
-    static int marginOffset(Context context, boolean needShowDialog, boolean expanded) {
-        if (!entryShown || expanded || !needShowDialog) {
-            return 0;
-        }
-        return buttonHeight(context) + gap(context);
     }
 
     static void setPanelController(Object controller) {
@@ -349,27 +407,24 @@ final class MediaVolumeEntry {
     // ---------------------------------------------------------------- 动画
 
     /**
-     * 官方 show/hide 动画每帧驱动音量柱与静音/勿扰行；入口跟着勿扰行做同样的
-     * 缩放与纵向位移补偿，因此看起来和原生按钮在同一个整体里缩放。
+     * 入口已经并入原生 show/hide 动画序列时，缩放与位移全部由原生动画驱动，这里什么都不做；
+     * 没并进去（动画器没找到 / 字段不匹配）时，退回到跟着勿扰行同步缩放与透明度。
      */
     static void syncAnimation() {
+        if (animatorJoined) {
+            return;
+        }
         ViewGroup entry = entryRow.get();
         if (entry == null || entry.getVisibility() != View.VISIBLE) {
             return;
         }
         View dnd = dndRow.get();
-        float scale = dnd != null ? dnd.getScaleX() : 1f;
-        entry.setScaleX(scale);
-        entry.setScaleY(scale);
-        if (dnd != null) {
-            entry.setAlpha(dnd.getAlpha());
+        if (dnd == null) {
+            return;
         }
-        View container = volumeContainer.get();
-        if (container != null) {
-            float entryCenter = entry.getTop() + entry.getHeight() / 2f;
-            float containerCenter = container.getTop() + container.getHeight() / 2f;
-            entry.setTranslationY((scale - 1f) * (entryCenter - containerCenter));
-        }
+        entry.setScaleX(dnd.getScaleX());
+        entry.setScaleY(dnd.getScaleY());
+        entry.setAlpha(dnd.getAlpha());
     }
 
     private static void resetAnimation() {
@@ -385,7 +440,7 @@ final class MediaVolumeEntry {
 
     // ---------------------------------------------------------------- 内部实现
 
-    private static void applyVisibility(ViewGroup dialog, boolean allowMarginFix) {
+    private static void applyVisibility(ViewGroup dialog) {
         boolean enabled = HyperVolumeAncSettings.appVolumeEntryEnabled();
         boolean expanded = panelExpanded;
         boolean playing = MediaPlaybackWatcher.hasActiveMediaPlayback(dialog.getContext());
@@ -397,48 +452,71 @@ final class MediaVolumeEntry {
                         + " · 二级菜单=" + (expanded ? "展开" : "收起")
                         + " · 有应用在播放=" + (playing ? "是" : "否")
                         + " → " + (visible ? "显示" : "隐藏"));
-        setEntryShown(dialog, visible, allowMarginFix);
+        setEntryShown(dialog, visible);
     }
 
-    private static void setEntryShown(ViewGroup dialog, boolean visible, boolean adjustMargin) {
+    private static void setEntryShown(ViewGroup dialog, boolean visible) {
         ViewGroup entry = entryRow.get();
         if (entry == null || dialogView.get() != dialog) {
             return;
         }
         boolean changed = entryShown != visible;
         entryShown = visible;
-        if (entry.getVisibility() != (visible ? View.VISIBLE : View.GONE)) {
-            entry.setVisibility(visible ? View.VISIBLE : View.GONE);
+        int visibility = visible ? View.VISIBLE : View.GONE;
+        if (visible) {
+            syncDividerSize();
+        }
+        if (entry.getVisibility() != visibility) {
+            entry.setVisibility(visibility);
+        }
+        View divider = entryDivider.get();
+        if (divider != null && divider.getVisibility() != visibility) {
+            divider.setVisibility(visibility);
         }
         if (changed) {
             HookLog.i("entry " + (visible ? "shown" : "hidden")
-                    + " marginFix=" + adjustMargin + " visibility=" + entry.getVisibility());
+                    + " visibility=" + entry.getVisibility());
         }
         if (visible) {
             syncAnimation();
         } else {
             resetAnimation();
         }
-        if (changed && adjustMargin) {
-            shiftPanel(dialog, visible ? -1 : 1);
+    }
+
+    /** 入口与上一行之间的间距跟随原生分隔条（折叠态与展开态的间距不同）。 */
+    private static void syncDividerSize() {
+        View divider = entryDivider.get();
+        View source = nativeDividerRef.get();
+        if (divider == null || source == null) {
+            return;
+        }
+        ViewGroup.LayoutParams from = source.getLayoutParams();
+        ViewGroup.LayoutParams to = divider.getLayoutParams();
+        if (from != null && to != null
+                && (to.width != from.width || to.height != from.height)) {
+            to.width = from.width;
+            to.height = from.height;
+            divider.setLayoutParams(to);
         }
     }
 
-    private static void shiftPanel(ViewGroup dialog, int direction) {
-        ViewGroup.LayoutParams params = dialog.getLayoutParams();
-        if (!(params instanceof ViewGroup.MarginLayoutParams margins)) {
-            return;
+    private static ViewGroup.LayoutParams copyLayoutParams(ViewGroup.LayoutParams source) {
+        if (source instanceof LinearLayout.LayoutParams linear) {
+            return new LinearLayout.LayoutParams(linear);
         }
-        int shift = buttonHeight(dialog.getContext()) + gap(dialog.getContext());
-        int target = margins.topMargin + direction * shift;
-        if (target < 0) {
-            HookLog.w("skip panel margin shift, topMargin would become " + target);
-            return;
+        return new LinearLayout.LayoutParams(source);
+    }
+
+    private static boolean isInside(View view, View ancestor) {
+        android.view.ViewParent parent = view.getParent();
+        while (parent instanceof View current) {
+            if (current == ancestor) {
+                return true;
+            }
+            parent = current.getParent();
         }
-        margins.topMargin = target;
-        dialog.setLayoutParams(margins);
-        HookLog.i("panel topMargin " + (direction < 0 ? "reduced" : "restored")
-                + " by " + shift + " -> " + target);
+        return view == ancestor;
     }
 
     private static boolean isExpanded(View dialog) {
@@ -561,28 +639,6 @@ final class MediaVolumeEntry {
             id = resources.getIdentifier(name, type, context.getPackageName());
         }
         return id;
-    }
-
-    private static int dimension(Context context, String name, int fallbackDp) {
-        int id = resource(context, "dimen", name);
-        return id == 0
-                ? Math.round(fallbackDp * context.getResources().getDisplayMetrics().density)
-                : context.getResources().getDimensionPixelSize(id);
-    }
-
-    /** 实例按钮本身的宽度：折叠态与静音 / 勿扰一致（58dp）。 */
-    private static int buttonWidth(Context context) {
-        return dimension(context, "o3_miui_ringer_btn_width", FALLBACK_BUTTON_WIDTH_DP);
-    }
-
-    /** 实例按钮本身的高度：折叠态 40dp。 */
-    private static int buttonHeight(Context context) {
-        return dimension(context, "o3_miui_ringer_btn_height", FALLBACK_BUTTON_HEIGHT_DP);
-    }
-
-    /** 与原生两个按钮之间的间距一致（折叠态用 miui_volume_footer_margin_top）。 */
-    private static int gap(Context context) {
-        return dimension(context, "miui_volume_footer_margin_top", FALLBACK_GAP_DP);
     }
 
     /**

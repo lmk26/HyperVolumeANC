@@ -50,7 +50,7 @@ import io.github.libxposed.api.XposedModule;
  *
  * 作用：
  * 1. 接收音量条入口按钮发来的展开广播。
- * 2. 隐藏小米声音自带的悬浮球（入口已经搬到音量条上方）。
+ * 2. 隐藏小米声音自带的悬浮球（入口已经搬到勿扰按钮下方）。
  * 3. 去掉面板弹出时的全屏背景模糊与压暗，让桌面保持清晰。
  * 4. 按模块的视觉规范排布卡片：右侧垂直居中、圆角毛玻璃、滑块比例、分页指示器。
  * 5. 面板从右侧滑入 / 滑出，收起时不播放原生缩放动画。
@@ -204,7 +204,7 @@ final class MiSoundAppVolumeHook {
                                 HookLog.i("MiSound addView " + className + " type=" + params.type
                                         + " size=" + params.width + "x" + params.height);
                                 if (isFloatingBall(view, params)) {
-                                    // 入口已经移到音量条上方，悬浮球不再显示，但保留实例做点击回退。
+                                    // 入口已经移到勿扰按钮下方，悬浮球不再显示，但保留实例做点击回退。
                                     captureFloatingBall(view);
                                     return HyperVolumeAncSettings.appVolumeEntryEnabled()
                                             ? null
@@ -321,7 +321,7 @@ final class MiSoundAppVolumeHook {
             ball.setVisibility(View.GONE);
             HookLog.i("hid the native MiSound floating ball (fallback path)");
             HookDiagnostics.hit("misound_ball", "原生悬浮球",
-                    "已隐藏原生悬浮球（入口移到音量条上方）");
+                    "已隐藏原生悬浮球（入口移到勿扰按钮下方）");
         }
     }
 

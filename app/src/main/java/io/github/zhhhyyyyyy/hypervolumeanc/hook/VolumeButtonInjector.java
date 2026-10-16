@@ -148,21 +148,31 @@ final class VolumeButtonInjector {
             }
             return;
         }
+        if (appendRowToShowHideAnimator(animator, volumeView, button.ancRow)) {
+            HookLog.i("ANC row joined native show/hide animation sequence");
+        }
+    }
+
+    /**
+     * 把一个新增的按钮行追加到原生 show/hide 动画的行序列末尾，
+     * 让它和静音 / 勿扰按钮一起缩放、位移。已经在序列里时直接返回 true。
+     */
+    static boolean appendRowToShowHideAnimator(Object animator, View volumeView, View newRow) {
         try {
             Field rowsField = animator.getClass().getDeclaredField("mRingerBtnLayouts");
             rowsField.setAccessible(true);
             View[] rows = (View[]) rowsField.get(animator);
             if (rows == null) {
-                return;
+                return false;
             }
             for (View row : rows) {
-                if (row == button.ancRow) {
-                    return;
+                if (row == newRow) {
+                    return true;
                 }
             }
 
             View[] extendedRows = Arrays.copyOf(rows, rows.length + 1);
-            extendedRows[rows.length] = button.ancRow;
+            extendedRows[rows.length] = newRow;
             rowsField.set(animator, extendedRows);
 
             Field positionsField = animator.getClass().getDeclaredField("ringerBtnLayoutsX");
@@ -177,12 +187,24 @@ final class VolumeButtonInjector {
                 }
             }
             extendedPositions[extendedPositions.length - 1] =
-                    button.ancRow.getX() + volumeView.getX();
+                    newRow.getX() + volumeView.getX();
             positionsField.set(animator, extendedPositions);
-            HookLog.i("ANC row joined native show/hide animation sequence");
+            return true;
         } catch (Throwable error) {
             HookLog.e("failed to join native show/hide animation", error);
+            return false;
         }
+    }
+
+    /** 降噪行当前是否可见（可见时分应用音量入口排在它的下面）。 */
+    static boolean extraRowVisible() {
+        View row = injectedRow.get();
+        return row != null && row.getVisibility() == View.VISIBLE;
+    }
+
+    /** 降噪行本身，不存在或已经被移除时返回 null。 */
+    static View extraRow() {
+        return injectedRow.get();
     }
 
     static void syncExpandCollapsedFrame(Object animator) {
@@ -251,7 +273,7 @@ final class VolumeButtonInjector {
         return new LinearLayout.LayoutParams(source);
     }
 
-    private static void setWrapContentHeight(View view) {
+    static void setWrapContentHeight(View view) {
         ViewGroup.LayoutParams params = view.getLayoutParams();
         if (params != null && params.height != ViewGroup.LayoutParams.WRAP_CONTENT) {
             params.height = ViewGroup.LayoutParams.WRAP_CONTENT;

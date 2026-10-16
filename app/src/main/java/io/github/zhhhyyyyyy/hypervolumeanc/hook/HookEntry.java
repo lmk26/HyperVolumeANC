@@ -448,6 +448,8 @@ public final class HookEntry extends XposedModule {
                         Object result = chain.proceed();
                         VolumeButtonInjector.attachToShowHideAnimator(
                                 chain.getThisObject(), (android.view.View) chain.getArg(0));
+                        MediaVolumeEntry.onShowHideAnimatorReady(
+                                chain.getThisObject(), (android.view.View) chain.getArg(0));
                         installAnimatorListenerHook(chain.getThisObject(), classLoader);
                         return result;
                     });
@@ -599,12 +601,11 @@ public final class HookEntry extends XposedModule {
 
     /**
      * 分应用音量入口相关的钩子：入口的显隐跟随音量条的展示 / 收起与二级菜单状态，
-     * 并让入口在原生 show/hide 动画里跟着静音 / 勿扰按钮一起缩放位移。
+     * 并让入口（位于勿扰按钮下方）在原生 show/hide 动画里跟着静音 / 勿扰按钮一起缩放位移。
      */
     private void installDialogHooks(ClassLoader classLoader) {
         installVolumeDialogViewHooks(classLoader);
         installPanelControllerHook(classLoader);
-        installEntryMarginHook(classLoader);
         installSlideAnimHook(classLoader);
     }
 
@@ -750,37 +751,8 @@ public final class HookEntry extends XposedModule {
     }
 
     /**
-     * 入口占据音量条上方一行时，面板 topMargin 同步上移，
-     * 保证滑块、静音与勿扰按钮的绝对位置和横屏表现都与原生一致。
-     */
-    private void installEntryMarginHook(ClassLoader classLoader) {
-        try {
-            Class<?> resourceClass = Class.forName(VOLUME_DIALOG_RES, false, classLoader);
-            Method marginTop = resourceClass.getDeclaredMethod("getMarginTop",
-                    android.content.Context.class, boolean.class, boolean.class, int.class, int.class);
-            hook(marginTop)
-                    .setId("hypervolumeanc.v1:volume-dialog-res:margin-top:"
-                            + Integer.toHexString(System.identityHashCode(classLoader)))
-                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                    .intercept(chain -> {
-                        Object result = chain.proceed();
-                        if (!(result instanceof Integer margin)) {
-                            return result;
-                        }
-                        int offset = MediaVolumeEntry.marginOffset(
-                                (android.content.Context) chain.getArg(0),
-                                Boolean.TRUE.equals(chain.getArg(1)),
-                                Boolean.TRUE.equals(chain.getArg(2)));
-                        return offset == 0 ? margin : margin - offset;
-                    });
-        } catch (Throwable error) {
-            HookLog.w("app volume entry margin hook unavailable", error);
-        }
-    }
-
-    /**
      * 触底 / 拖拽拉伸 / 按键调节时的弹性位移：官方按等差序列驱动静音与勿扰行，
-     * 这里把位于它们上下两侧的新增按钮外推一步，保持整列一起伸缩。
+     * 这里把排在它们后面的新增按钮（降噪、分应用音量入口）外推，保持整列一起伸缩。
      */
     private void installSlideAnimHook(ClassLoader classLoader) {
         try {

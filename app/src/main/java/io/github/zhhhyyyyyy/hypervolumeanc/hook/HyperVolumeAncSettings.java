@@ -59,7 +59,7 @@ final class HyperVolumeAncSettings {
         return islandNotification;
     }
 
-    /** 是否在音量条上方显示分应用音量入口（有应用发声时才出现）。 */
+    /** 是否在勿扰按钮下方显示分应用音量入口（有应用发声时才出现）。 */
     static boolean appVolumeEntryEnabled() {
         return appVolumeEntry;
     }
